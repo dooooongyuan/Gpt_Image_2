@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/codex/:path*",
+      "destination": "https://dm-fox.rjj.cc/codex/:path*"
+    }
+  ]
+}
