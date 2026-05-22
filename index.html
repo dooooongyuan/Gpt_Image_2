@@ -689,6 +689,12 @@
     .edit-gallery-picker .pick-item:hover { border-color: var(--accent); }
     .edit-gallery-picker .pick-item.selected { border-color: var(--accent-light); box-shadow: 0 0 0 2px rgba(var(--accent-rgb),0.3); }
     .edit-gallery-picker .pick-empty { grid-column: 1/-1; text-align: center; padding: 1rem; color: var(--muted); font-size: 0.78rem; }
+    .field-note {
+      margin-top: 0.45rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
 
     @media (max-width: 980px) {
       body {
@@ -1042,7 +1048,8 @@
       <div class="field">
         <div class="field-label">图片尺寸</div>
         <div class="sel-wrap">
-          <select id="size">
+          <select id="size" onchange="toggleCustomSizeField('gen')">
+            <option value="auto" selected>Auto 自动适配（按提示词智能选择）</option>
             <option value="1536x1024">1536 × 1024 — 横屏 3:2</option>
             <option value="1024x1024">1024 × 1024 — 正方形 1:1</option>
             <option value="1024x1536">1024 × 1536 — 竖屏 2:3</option>
@@ -1397,6 +1404,129 @@ let   curModalId = null;
 const THEME_KEY = 'gpt2_theme';
 const API_URL_KEY = 'gpt2_api_url';
 const DEFAULT_API_URL = '/codex';
+const SIZE_RULES = {
+  maxEdge: 3840,
+  minPixels: 655360,
+  maxPixels: 8294400,
+  maxRatio: 3,
+  step: 16
+};
+const SIZE_PRESETS = [
+  { value: 'auto', label: 'Auto 自动适配（按内容智能选择）' },
+  { value: '1536x1024', label: '1536 × 1024 · 横屏 3:2' },
+  { value: '1024x1024', label: '1024 × 1024 · 正方形 1:1' },
+  { value: '1024x1536', label: '1024 × 1536 · 竖屏 2:3' },
+  { value: '1280x720', label: '1280 × 720 · 16:9 横屏' },
+  { value: '720x1280', label: '720 × 1280 · 9:16 竖屏' },
+  { value: '2048x2048', label: '2048 × 2048 · 2K 正方（实验）' },
+  { value: '2048x1152', label: '2048 × 1152 · 2K 宽屏（实验）' },
+  { value: '3840x2160', label: '3840 × 2160 · 4K 横屏（实验）' },
+  { value: '2160x3840', label: '2160 × 3840 · 4K 竖屏（实验）' },
+  { value: 'custom', label: '自定义尺寸…' }
+];
+
+function getSizeControlConfig(type) {
+  return type === 'edit'
+    ? {
+        selectId: 'editSize',
+        fieldId: 'editCustomSizeField',
+        inputId: 'editCustomSize',
+        noteId: 'editSizeNote',
+        placeholder: '例如 1536x864（宽x高）',
+        note: '支持 auto，也可以直接输入合法尺寸；编辑时会按源图和提示词一起适配。'
+      }
+    : {
+        selectId: 'size',
+        fieldId: 'customSizeField',
+        inputId: 'customSize',
+        noteId: 'sizeNote',
+        placeholder: '例如 2048x1152（宽x高）',
+        note: '支持 auto 和自定义尺寸。自定义需满足：长边不超过 3840、宽高均为 16 的倍数、长宽比不超过 3:1、总像素在 655,360 到 8,294,400 之间。2K 及以上属于官方文档标注的实验性尺寸。'
+      };
+}
+
+function initSizeControls() {
+  ['gen', 'edit'].forEach(type => {
+    const cfg = getSizeControlConfig(type);
+    const select = document.getElementById(cfg.selectId);
+    if (!select) return;
+
+    select.innerHTML = SIZE_PRESETS.map((preset, index) =>
+      `<option value="${preset.value}"${index === 0 ? ' selected' : ''}>${preset.label}</option>`
+    ).join('');
+    select.onchange = () => toggleCustomSizeField(type);
+
+    let customField = document.getElementById(cfg.fieldId);
+    if (!customField) {
+      customField = document.createElement('div');
+      customField.className = 'input-row';
+      customField.id = cfg.fieldId;
+      customField.style.display = 'none';
+      customField.style.marginTop = '6px';
+      customField.innerHTML = `<input type="text" id="${cfg.inputId}" placeholder="${cfg.placeholder}">`;
+      select.parentElement.insertAdjacentElement('afterend', customField);
+    }
+
+    let note = document.getElementById(cfg.noteId);
+    if (!note) {
+      note = document.createElement('div');
+      note.className = 'field-note';
+      note.id = cfg.noteId;
+      note.textContent = cfg.note;
+      customField.insertAdjacentElement('afterend', note);
+    }
+
+    toggleCustomSizeField(type);
+  });
+}
+
+function toggleCustomSizeField(type) {
+  const cfg = getSizeControlConfig(type);
+  const select = document.getElementById(cfg.selectId);
+  const field = document.getElementById(cfg.fieldId);
+  if (!select || !field) return;
+  field.style.display = select.value === 'custom' ? '' : 'none';
+}
+
+function validateCustomSize(width, height) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    return '尺寸必须是正整数，例如 2048x1152';
+  }
+  if (Math.max(width, height) > SIZE_RULES.maxEdge) {
+    return `长边不能超过 ${SIZE_RULES.maxEdge}px`;
+  }
+  if (width % SIZE_RULES.step !== 0 || height % SIZE_RULES.step !== 0) {
+    return `宽高都必须是 ${SIZE_RULES.step} 的倍数`;
+  }
+  const ratio = Math.max(width, height) / Math.min(width, height);
+  if (ratio > SIZE_RULES.maxRatio) {
+    return `长宽比不能超过 ${SIZE_RULES.maxRatio}:1`;
+  }
+  const pixels = width * height;
+  if (pixels < SIZE_RULES.minPixels || pixels > SIZE_RULES.maxPixels) {
+    return `总像素需在 ${SIZE_RULES.minPixels.toLocaleString()} 到 ${SIZE_RULES.maxPixels.toLocaleString()} 之间`;
+  }
+  return '';
+}
+
+function resolveRequestedSize(type) {
+  const cfg = getSizeControlConfig(type);
+  const select = document.getElementById(cfg.selectId);
+  if (!select) return 'auto';
+  if (select.value !== 'custom') return select.value;
+
+  const input = document.getElementById(cfg.inputId);
+  const raw = (input?.value || '').trim().toLowerCase().replace(/\s+/g, '');
+  const match = raw.match(/^(\d{2,5})x(\d{2,5})$/);
+  if (!match) throw new Error('自定义尺寸格式应为 宽x高，例如 2048x1152');
+
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const err = validateCustomSize(width, height);
+  if (err) throw new Error(err);
+
+  return `${width}x${height}`;
+}
 
 function normalizeApiUrl(raw) {
   let next = (raw || '').trim();
@@ -1550,11 +1680,17 @@ function toggleKeyVis() {
 // ─── GENERATE ──────────────────────────────────────────────────────────────
 async function generate() {
   const prompt = document.getElementById('prompt').value.trim();
-  const size   = document.getElementById('size').value;
+  let size;
   const apiKey = document.getElementById('apiKey').value.trim();
 
   if (!prompt) return toast('请输入提示词', 'err');
   if (!apiKey) return toast('请输入 API 密钥', 'err');
+
+  try {
+    size = resolveRequestedSize('gen');
+  } catch (e) {
+    return toast(e.message, 'err');
+  }
 
   const btn = document.getElementById('genBtn');
   btn.disabled = true;
@@ -1766,10 +1902,16 @@ function renderAll() {
 
 // ─── SKELETON ──────────────────────────────────────────────────────────────
 function addSkeleton(size) {
-  const [w, h] = size.split('x').map(Number);
   const el = document.createElement('div');
   el.className = 'skeleton';
-  el.style.paddingBottom = `${(h / w * 100).toFixed(2)}%`;
+  const match = String(size || '').match(/^(\d+)x(\d+)$/);
+  if (match) {
+    const w = Number(match[1]);
+    const h = Number(match[2]);
+    el.style.paddingBottom = `${(h / w * 100).toFixed(2)}%`;
+  } else {
+    el.style.paddingBottom = '100%';
+  }
   document.getElementById('genGallery').prepend(el);
   return el;
 }
@@ -2178,11 +2320,17 @@ function pickEditFmt(el) {
 async function doEdit() {
   const prompt = document.getElementById('editPrompt').value.trim();
   const apiKey = document.getElementById('apiKey').value.trim();
-  const size = document.getElementById('editSize').value;
+  let size;
 
   if (!prompt) return toast('请输入编辑提示词', 'err');
   if (!apiKey) return toast('请输入 API 密钥', 'err');
   if (!editSrcBlob && !editSelectedGalleryId) return toast('请选择或上传一张源图', 'err');
+
+  try {
+    size = resolveRequestedSize('edit');
+  } catch (e) {
+    return toast(e.message, 'err');
+  }
 
   const btn = document.getElementById('editBtn');
   btn.disabled = true;
@@ -2279,7 +2427,7 @@ async function fetchEdit(apiKey, imageBlob, maskBlob, prompt, size, quality, fmt
     form.append('image', imageBlob, 'source.png');
     form.append('quality', quality);
     form.append('output_format', fmt);
-    if (size && size !== 'auto') form.append('size', size);
+    if (size) form.append('size', size);
     if (maskBlob) form.append('mask', maskBlob, 'mask.png');
 
     const resp = await fetch(getApiUrl('/v1/images/edits'), {
@@ -2341,6 +2489,7 @@ document.addEventListener('keydown', e => {
 // ─── INIT ──────────────────────────────────────────────────────────────────
 applyTheme(preferredTheme());
 loadApiUrl();
+initSizeControls();
 loadFromStorage();
 </script>
 </body>
